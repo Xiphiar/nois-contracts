@@ -6,7 +6,7 @@ use cosmwasm_std::{
     Uint128, WasmMsg,
 };
 use cw_storage_plus::Bound;
-use drand_common::{is_valid, DRAND_MAINNET2_PUBKEY};
+use drand_common::DRAND_MAINNET2_PUBKEY;
 use drand_verify::{derive_randomness, G2Pubkey, Pubkey};
 
 use crate::attributes::{
@@ -285,10 +285,6 @@ fn execute_add_round(
     // TODO: Not covered by testing
     if !info.funds.is_empty() {
         return Err(StdError::generic_err("Do not send funds").into());
-    }
-
-    if !is_valid(round) {
-        return Err(ContractError::RoundInvalid { round });
     }
 
     let config = CONFIG.load(deps.storage)?;
@@ -641,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn add_round_fails_when_round_invalid() {
+    fn add_round_not_divisible_by_10_succeeds_but_gives_no_incentive() {
         let mut deps = mock_dependencies();
 
         let msg = InstantiateMsg {
@@ -652,11 +648,20 @@ mod tests {
         };
         let info = mock_info("creator", &[]);
         let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-        assert_eq!(0, res.messages.len());
+        assert_eq!(res.messages.len(), 0);
 
-        let msg = make_add_round_msg(8);
-        let err = execute(deps.as_mut(), mock_env(), mock_info("anyone", &[]), msg).unwrap_err();
-        assert!(matches!(err, ContractError::RoundInvalid { round: 8 }));
+        let round = 72761; // https://api3.drand.sh/dbd506d6ef76e5f386f41c651dcb808c5bcbd75471cc4eafa3f4df7ad4e4c493/public/72761
+        let msg = make_add_round_msg(round);
+        let response = execute(deps.as_mut(), mock_env(), mock_info("anyone", &[]), msg).unwrap();
+        assert_eq!(response.messages.len(), 0);
+        let attrs = response.attributes;
+        let randomness = first_attr(&attrs, "randomness").unwrap();
+        assert_eq!(
+            randomness,
+            "e65e811bca550d831779a3bc6f1724445fc0ee1beeaee80b15fa4cf85916cbde"
+        );
+        assert_eq!(first_attr(&attrs, "reward_points").unwrap(), "0");
+        assert_eq!(first_attr(&attrs, "reward_payout").unwrap(), "0unois");
     }
 
     #[test]
