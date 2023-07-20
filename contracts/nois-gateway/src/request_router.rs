@@ -2,6 +2,7 @@
 
 use cosmwasm_std::{
     to_binary, Binary, CosmosMsg, DepsMut, Env, HexBinary, IbcMsg, StdError, StdResult, Timestamp,
+    WasmMsg,
 };
 use drand_common::{time_of_round, valid_round_after, DRAND_CHAIN_HASH};
 use nois_protocol::{InPacketAck, OutPacket, StdAck, DELIVER_BEACON_PACKET_LIFETIME};
@@ -10,7 +11,7 @@ use crate::{
     drand_archive::{archive_lookup, archive_store},
     state::{
         increment_processed_drand_jobs, unprocessed_drand_jobs_dequeue,
-        unprocessed_drand_jobs_enqueue, Job,
+        unprocessed_drand_jobs_enqueue, Job, CONFIG,
     },
 };
 
@@ -50,10 +51,10 @@ impl RequestRouter {
         origin: Binary,
     ) -> StdResult<RoutingReceipt> {
         // Here we currently only have one backend
-        self.handle_drand(deps, env, channel, after, origin)
+        self.handle_drand_request(deps, env, channel, after, origin)
     }
 
-    fn handle_drand(
+    fn handle_drand_request(
         &self,
         deps: DepsMut,
         env: &Env,
@@ -83,6 +84,19 @@ impl RequestRouter {
             false
         } else {
             unprocessed_drand_jobs_enqueue(deps.storage, round, &job)?;
+            let config = CONFIG.load(deps.storage)?;
+            if let Some(drand_addr) = config.drand {
+                msgs.push(
+                    WasmMsg::Execute {
+                        contract_addr: drand_addr.into(),
+                        msg: Binary::from(Vec::<u8>::from(format!(
+                            "{{\"incentivise_round\":{{\"round\":{round}}}}}"
+                        ))),
+                        funds: vec![],
+                    }
+                    .into(),
+                );
+            }
             true
         };
 

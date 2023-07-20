@@ -4,6 +4,24 @@ use cw_storage_plus::{Item, Map};
 
 use drand_common::time_of_round;
 
+/// Top level storage key. Values must not conflict.
+/// Each key is only one byte long to ensure we use the smallest possible storage keys.
+#[repr(u8)]
+pub enum TopKey {
+    /// Incentivised rounds
+    Incentivised = b'i',
+}
+
+impl TopKey {
+    const fn as_str(&self) -> &str {
+        let data = unsafe { std::mem::transmute::<_, &[u8; 1]>(self) };
+        match std::str::from_utf8(data) {
+            Ok(a) => a,
+            Err(_) => panic!("Non-utf8 enum value found. Use a-z, A-Z and 0-9"),
+        }
+    }
+}
+
 #[cw_serde]
 pub struct Config {
     /// manager for bot addr de/allowlist
@@ -74,6 +92,12 @@ pub const SUBMISSIONS: Map<(u64, &Addr), StoredSubmission> = Map::new("submissio
 
 /// The number of submissions done for each round
 pub const SUBMISSIONS_COUNT: Map<u64, u16> = Map::new("counts");
+
+/// Dummy value. Don't rely on the value but just check existence.
+pub const INCENTIVISED_ROUNDS_MARKER: u8 = 1;
+
+/// A map from round number to marker value
+pub const INCENTIVISED_ROUNDS: Map<u64, u8> = Map::new(TopKey::Incentivised.as_str());
 
 /// The bot type for the state. We don't need the address here
 /// since this is stored in the storage key.
