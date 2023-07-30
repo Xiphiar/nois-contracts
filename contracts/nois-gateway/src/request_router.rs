@@ -89,9 +89,7 @@ impl RequestRouter {
                 msgs.push(
                     WasmMsg::Execute {
                         contract_addr: drand_addr.into(),
-                        msg: Binary::from(Vec::<u8>::from(format!(
-                            "{{\"incentivise_round\":{{\"round\":{round}}}}}"
-                        ))),
+                        msg: to_binary(&nois_drand::msg::ExecuteMsg::SetIncentivised { round })?,
                         funds: vec![],
                     }
                     .into(),
