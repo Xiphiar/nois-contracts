@@ -344,10 +344,19 @@ fn execute_withdraw(
 fn execute_update_allowlist(
     deps: DepsMut,
     _env: Env,
-    _info: MessageInfo,
+    info: MessageInfo,
     add_addresses: Vec<String>,
     remove_addresses: Vec<String>,
 ) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    // if manager set, check the calling address is the authorised multisig otherwise error unauthorised
+    ensure_eq!(
+        info.sender,
+        config.manager.as_ref().ok_or(ContractError::Unauthorized)?,
+        ContractError::Unauthorized
+    );
+
     update_allowlist(deps, add_addresses, remove_addresses)?;
     Ok(Response::new().add_attribute(ATTR_ACTION, "execute_update_allowlist"))
 }
@@ -1408,6 +1417,13 @@ mod tests {
 
         let err = execute(deps.as_mut(), mock_env(), mock_info("dapp", &[]), msg).unwrap_err();
         assert!(matches!(err, ContractError::Unauthorized));
+        // Update allowlist
+        let msg = ExecuteMsg::UpdateAllowlist {
+            add: vec!["aaa".to_owned(), "ccc".to_owned()],
+            remove: vec!["aaa".to_owned(), "bbb".to_owned()],
+        };
+        let err = execute(deps.as_mut(), mock_env(), mock_info("dapp", &[]), msg).unwrap_err();
+        assert!(matches!(err, ContractError::Unauthorized));
     }
 
     #[test]
@@ -1418,7 +1434,7 @@ mod tests {
             remove: vec!["aaa".to_owned(), "bbb".to_owned()],
         };
 
-        execute(deps.as_mut(), mock_env(), mock_info("dapp", &[]), msg).unwrap();
+        execute(deps.as_mut(), mock_env(), mock_info(CREATOR, &[]), msg).unwrap();
 
         assert!(!ALLOWLIST.has(&deps.storage, &Addr::unchecked("bbb")));
         assert!(ALLOWLIST.has(&deps.storage, &Addr::unchecked("ccc")));
@@ -1426,6 +1442,15 @@ mod tests {
         // If an address is both added and removed, err on the side or removing it,
         // hence, here we check that "aaa" is indeed not found.
         assert!(!ALLOWLIST.has(&deps.storage, &Addr::unchecked("aaa")));
+
+        // Ensure update allowlist from non-manager is unauthorized
+        let msg = ExecuteMsg::UpdateAllowlist {
+            add: vec!["some-contract".to_string()],
+            remove: vec![]
+        };
+        let err = execute(deps.as_mut(), mock_env(), mock_info("dapp", &[]), msg).unwrap_err();
+        assert!(matches!(err, ContractError::Unauthorized));
+    }
     }
 
     //
