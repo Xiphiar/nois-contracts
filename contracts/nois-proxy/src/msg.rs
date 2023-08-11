@@ -25,6 +25,12 @@ pub struct InstantiateMsg {
     /// List of addresses allowed to get randomness.
     /// This is optional and can be omitted. Defaults to an empty list.
     pub allowlist: Option<Vec<String>>,
+    /// List of addresses allowed to get randomness without payment.
+    /// This is optional and can be omitted. Defaults to an empty list.
+    pub payment_whitelist: Option<Vec<String>>,
+    /// List of addresses allowed to change payment whitelist.
+    /// This is optional and can be omitted. Defaults to an empty list.
+    pub operators: Option<Vec<String>>,
 }
 
 #[cw_serde]
@@ -73,6 +79,16 @@ pub enum ExecuteMsg {
     },
     // Add or remove entries from the list of addresses allowed to get randomness.
     UpdateAllowlist {
+        add: Vec<String>,
+        remove: Vec<String>,
+    },
+    // Add or remove entries from the list of addresses allowed to get randomness without payment.
+    UpdatePaymentWhitelist {
+        add: Vec<String>,
+        remove: Vec<String>,
+    },
+    // Add or remove entries from the list of addresses allowed edit the payment whitelist.
+    UpdateOperators {
         add: Vec<String>,
         remove: Vec<String>,
     },

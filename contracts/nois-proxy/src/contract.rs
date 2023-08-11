@@ -15,6 +15,7 @@ use nois_protocol::{
     REQUEST_BEACON_PACKET_LIFETIME, TRANSFER_PACKET_LIFETIME,
 };
 
+use crate::addons::{PAYMENT_WHITELIST, execute_update_payment_whitelist, execute_update_operators, OPERATORS};
 use crate::attributes::{
     ATTR_ACTION, ATTR_CALLBACK_ERROR_MSG, ATTR_CALLBACK_SUCCESS, EVENT_TYPE_CALLBACK,
 };
@@ -51,6 +52,8 @@ pub fn instantiate(
         mode,
         allowlist_enabled,
         allowlist,
+        payment_whitelist,
+        operators,
     } = msg;
     let manager = match manager {
         Some(ma) => Some(deps.api.addr_validate(&ma)?),
@@ -59,6 +62,8 @@ pub fn instantiate(
     let test_mode = test_mode.unwrap_or(false);
     let allowlist_enabled = allowlist_enabled.unwrap_or_default();
     let allowlist = allowlist.unwrap_or_default();
+    let payment_whitelist = payment_whitelist.unwrap_or_default();
+    let operators = operators.unwrap_or_default();
 
     let config = Config {
         prices,
@@ -81,6 +86,18 @@ pub fn instantiate(
     for addr in allowlist {
         let addr = deps.api.addr_validate(&addr)?;
         ALLOWLIST.save(deps.storage, &addr, &ALLOWLIST_MARKER)?;
+    }
+
+    // Save addresses to payment whitelist.
+    for addr in payment_whitelist {
+        let addr = deps.api.addr_validate(&addr)?;
+        PAYMENT_WHITELIST.save(deps.storage, &addr, &ALLOWLIST_MARKER)?;
+    }
+
+    // Save addresses to operators list.
+    for addr in operators {
+        let addr = deps.api.addr_validate(&addr)?;
+        OPERATORS.save(deps.storage, &addr, &ALLOWLIST_MARKER)?;
     }
 
     Ok(Response::new()
@@ -154,6 +171,12 @@ pub fn execute(
         ExecuteMsg::UpdateAllowlist { add, remove } => {
             execute_update_allowlist(deps, env, info, add, remove)
         }
+        ExecuteMsg::UpdatePaymentWhitelist { add, remove } => {
+            execute_update_payment_whitelist(deps, env, info, add, remove)
+        }
+        ExecuteMsg::UpdateOperators { add, remove } => {
+            execute_update_operators(deps, env, info, add, remove)
+        }
     }
 }
 
@@ -213,7 +236,9 @@ pub fn execute_get_randomness_impl(
     job_id: String,
 ) -> Result<Response, ContractError> {
     validate_job_id(&job_id)?;
-    validate_payment(&config.prices, &info.funds)?;
+    if !PAYMENT_WHITELIST.has(deps.storage, &info.sender) {
+        validate_payment(&config.prices, &info.funds)?;
+    }
 
     // only let whitelisted senders get randomness
     let allowlist_enabled = config.allowlist_enabled.unwrap_or(false);
@@ -989,6 +1014,8 @@ mod tests {
             mode: OperationalMode::Funded {},
             allowlist_enabled: None,
             allowlist: None,
+            operators: None,
+            payment_whitelist: None,
         });
         let info = mock_info(CREATOR, &[]);
         let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
@@ -1026,6 +1053,8 @@ mod tests {
             mode: OperationalMode::Funded {},
             allowlist_enabled: None,
             allowlist: None,
+            operators: None,
+            payment_whitelist: None,
         };
         let info = mock_info(CREATOR, &[]);
         let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
@@ -1082,6 +1111,8 @@ mod tests {
             mode: OperationalMode::Funded {},
             allowlist_enabled: Some(true),
             allowlist: Some(vec![CREATOR.to_string()]),
+            operators: None,
+            payment_whitelist: None,
         }));
         setup_channel(deps.as_mut());
 
@@ -1114,6 +1145,8 @@ mod tests {
             mode: OperationalMode::Funded {},
             allowlist_enabled: Some(true),
             allowlist: Some(vec![CREATOR.to_string()]),
+            operators: None,
+            payment_whitelist: None,
         }));
         setup_channel(deps.as_mut());
 
@@ -1126,6 +1159,40 @@ mod tests {
             msg,
         );
         assert!(matches!(err, Err(ContractError::SenderNotAllowed)));
+    }
+
+    #[test]
+    fn get_next_randomness_for_whitelisted_address() {
+        let mut deps = setup(Some(InstantiateMsg {
+            manager: Some(CREATOR.to_string()),
+            prices: vec![Coin::new(1_000000, "unoisx")],
+            test_mode: Some(true),
+            callback_gas_limit: 500_000,
+            mode: OperationalMode::Funded {},
+            allowlist_enabled: None,
+            allowlist: None,
+            operators: None,
+            payment_whitelist: Some(vec![CREATOR.to_string()]),
+        }));
+        setup_channel(deps.as_mut());
+
+        // Sender in allowlist
+        let msg = ExecuteMsg::GetNextRandomness { job_id: "1".into() };
+        let res = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(CREATOR, &vec![]),
+            msg,
+        )
+        .unwrap();
+        assert_eq!(res.messages.len(), 1);
+        let out_msg = &res.messages[0];
+        assert_eq!(out_msg.gas_limit, None);
+        assert_eq!(out_msg.reply_on, ReplyOn::Never);
+        assert!(matches!(
+            out_msg.msg,
+            CosmosMsg::Ibc(IbcMsg::SendPacket { .. })
+        ));
     }
 
     #[test]
@@ -1382,6 +1449,8 @@ mod tests {
             mode: OperationalMode::Funded {},
             allowlist_enabled: None,
             allowlist: None,
+            operators: None,
+            payment_whitelist: None,
         };
         let info = mock_info(CREATOR, &[]);
         instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
@@ -1424,6 +1493,20 @@ mod tests {
         };
         let err = execute(deps.as_mut(), mock_env(), mock_info("dapp", &[]), msg).unwrap_err();
         assert!(matches!(err, ContractError::Unauthorized));
+        // Update payment whitelist
+        let msg = ExecuteMsg::UpdatePaymentWhitelist {
+            add: vec!["aaa".to_owned(), "ccc".to_owned()],
+            remove: vec!["aaa".to_owned(), "bbb".to_owned()],
+        };
+        let err = execute(deps.as_mut(), mock_env(), mock_info("dapp", &[]), msg).unwrap_err();
+        assert!(matches!(err, ContractError::Unauthorized));
+        // Update operators
+        let msg = ExecuteMsg::UpdateOperators {
+            add: vec!["aaa".to_owned(), "ccc".to_owned()],
+            remove: vec!["aaa".to_owned(), "bbb".to_owned()],
+        };
+        let err = execute(deps.as_mut(), mock_env(), mock_info("dapp", &[]), msg).unwrap_err();
+        assert!(matches!(err, ContractError::Unauthorized));
     }
 
     #[test]
@@ -1451,6 +1534,57 @@ mod tests {
         let err = execute(deps.as_mut(), mock_env(), mock_info("dapp", &[]), msg).unwrap_err();
         assert!(matches!(err, ContractError::Unauthorized));
     }
+
+    #[test]
+    fn update_whitelist_works() {
+        // Instantiate with operator1
+        let msg = InstantiateMsg {
+            manager: Some(CREATOR.to_string()),
+            prices: vec![Coin::new(1_000000, "unoisx")],
+            test_mode: None,
+            callback_gas_limit: 500_000,
+            mode: OperationalMode::Funded {},
+            allowlist_enabled: None,
+            allowlist: None,
+            operators: Some(vec!["operator1".to_owned()]),
+            payment_whitelist: None,
+        };
+        let mut deps = setup(Some(msg));
+        assert!(OPERATORS.has(&deps.storage, &Addr::unchecked("operator1")));
+
+        // Ensure operators can't add operators
+        let msg = ExecuteMsg::UpdateOperators {
+            add: vec!["operator2".to_owned()],
+            remove: vec![],
+        };
+        let err = execute(deps.as_mut(), mock_env(), mock_info("operator1", &[]), msg.clone()).unwrap_err();
+        assert!(matches!(err, ContractError::Unauthorized));
+
+        // Ensure manager can add operators
+        execute(deps.as_mut(), mock_env(), mock_info(CREATOR, &[]), msg).unwrap();
+        assert!(OPERATORS.has(&deps.storage, &Addr::unchecked("operator2")));
+
+        // Ensure update payment whitelist from operators works
+        let msg = ExecuteMsg::UpdatePaymentWhitelist {
+            add: vec!["some-contract".to_string()],
+            remove: vec![]
+        };
+        execute(deps.as_mut(), mock_env(), mock_info("operator1", &[]), msg).unwrap();
+        assert!(PAYMENT_WHITELIST.has(&deps.storage, &Addr::unchecked("some-contract")));
+
+        let msg = ExecuteMsg::UpdatePaymentWhitelist {
+            add: vec![],
+            remove: vec!["some-contract".to_string()]
+        };        execute(deps.as_mut(), mock_env(), mock_info("operator2", &[]), msg).unwrap();
+        assert!(!PAYMENT_WHITELIST.has(&deps.storage, &Addr::unchecked("some-contract")));
+
+        // Ensure update payment whitelist from manager works
+        let msg = ExecuteMsg::UpdatePaymentWhitelist {
+            add: vec!["some-contract2".to_string()],
+            remove: vec![]
+        };
+        execute(deps.as_mut(), mock_env(), mock_info(CREATOR, &[]), msg).unwrap();
+        assert!(PAYMENT_WHITELIST.has(&deps.storage, &Addr::unchecked("some-contract2")));
     }
 
     //
@@ -1509,6 +1643,8 @@ mod tests {
             mode: OperationalMode::Funded {},
             allowlist_enabled: Some(true),
             allowlist: Some(addr_in_allowlist),
+            operators: None,
+            payment_whitelist: None,
         }));
 
         let AllowlistResponse { allowed } =
@@ -1525,6 +1661,8 @@ mod tests {
             mode: OperationalMode::Funded {},
             allowlist_enabled: Some(true),
             allowlist: Some(vec![]),
+            operators: None,
+            payment_whitelist: None,
         }));
 
         let AllowlistResponse { allowed } =
@@ -1545,6 +1683,8 @@ mod tests {
             mode: OperationalMode::Funded {},
             allowlist_enabled: Some(true),
             allowlist: Some(vec![addr_in_allowlist.clone()]),
+            operators: None,
+            payment_whitelist: None,
         }));
 
         // expect the address IN allow list to return true
@@ -1588,6 +1728,8 @@ mod tests {
             mode: OperationalMode::Funded {},
             allowlist_enabled: Some(false),
             allowlist: Some(vec![addr_in_allowlist.clone()]),
+            operators: None,
+            payment_whitelist: None,
         }));
 
         // expect the address IN allow list to return true

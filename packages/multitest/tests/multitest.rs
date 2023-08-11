@@ -137,6 +137,8 @@ fn integration_test() {
                 mode: nois_proxy::state::OperationalMode::Funded {},
                 allowlist_enabled: None,
                 allowlist: None,
+                operators: None,
+                payment_whitelist: None,
             },
             &[],
             "Nois-Proxy",
